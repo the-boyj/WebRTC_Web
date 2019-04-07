@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <base target="_blank">
+
+    <title>web client</title>
+</head>
+
+<body>
+
+<div>
+    <button id="getMedia">Get media</button>
+    <button id="connect" disabled="">Connect</button>
+    <button id="hangup" disabled="">Hang Up</button>
+</div>
+
+<div id="getUserMedia">
+    <div class="input">
+        <h2>Camera constraints</h2>
+        <div id="server">
+            <label>서버 주소 : </label>
+            <input type="text" value="http://localhost:8080">
+        </div>
+        <div id="minWidth">
+            <label>Min width <span>300</span>px:</label>
+            <input type="range" min="0" max="4096" value="300">
+        </div>
+        <div id="maxWidth">
+            <label>Max width <span>640</span>px:</label>
+            <input type="range" min="0" max="4096" value="640">
+        </div>
+        <div id="minHeight">
+            <label>Min height <span>200</span>px:</label>
+            <input type="range" min="0" max="2160" value="200">
+        </div>
+        <div id="maxHeight">
+            <label>Max height <span>480</span>px:</label>
+            <input type="range" min="0" max="2160" value="480">
+        </div>
+        <div id="minFramerate">
+            <label>Min frameRate <span>0</span>fps:</label>
+            <input type="range" min="0" max="60" value="0">
+        </div>
+        <div id="maxFramerate">
+            <label>Max frameRate <span>0</span>fps:</label>
+            <input type="range" min="0" max="60" value="0">
+        </div>
+    </div>
+    <div id="getUserMediaConstraints" class="output"></div>
+</div>
+
+<section id="video">
+    <div id="localVideo">
+        <video playsinline="" autoplay="" muted=""></video>
+        <div></div>
+    </div>
+    <div id="remoteVideo">
+        <video playsinline="" autoplay="" muted=""></video>
+        <div></div>
+        <div id="bitrate"></div>
+        <div id="peer"></div>
+    </div>
+</section>
+<section id="statistics">
+    <div id="senderStats"></div>
+    <div id="receiverStats"></div>
+</section>
+
+<link rel="stylesheet" href="./css/index.css">
+<script src="./js/index.js"></script>
+
+</body>
+
+</html>
