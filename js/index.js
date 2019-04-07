@@ -1,5 +1,6 @@
 'use strict';
 
+
 const getMediaButton = document.querySelector('button#getMedia');
 const connectButton = document.querySelector('button#connect');
 const hangupButton = document.querySelector('button#hangup');
@@ -8,6 +9,7 @@ getMediaButton.onclick = getMedia;
 connectButton.onclick = createPeerConnection;
 hangupButton.onclick = hangup;
 
+const serverLocation = document.querySelector('div#server input');
 const minWidthInput = document.querySelector('div#minWidth input');
 const maxWidthInput = document.querySelector('div#maxWidth input');
 const minHeightInput = document.querySelector('div#minHeight input');
@@ -35,6 +37,15 @@ let remotePeerConnection;
 let localStream;
 let bytesPrev;
 let timestampPrev;
+let socket;
+
+// 참고 : https://stackoverflow.com/questions/105034/create-guid-uuid-in-javascript
+function uuidv4() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
 
 main();
 
@@ -69,6 +80,7 @@ function hangup() {
     getMediaButton.disabled = false;
 }
 
+// 자신의 미디어 받아오는 부분
 function getMedia() {
     getMediaButton.disabled = true;
     if (localStream) {
@@ -95,6 +107,7 @@ function gotStream(stream) {
     localVideo.srcObject = stream;
 }
 
+// input 정보들 읽어서 constraints 만들기
 function getUserMediaConstraints() {
     const constraints = {};
     constraints.audio = true;
@@ -132,7 +145,14 @@ function displayGetUserMediaConstraints() {
     getUserMediaConstraintsDiv.textContent = JSON.stringify(constraints, null, '    ');
 }
 
+// connect 버튼을 눌렀을 때 실행
 function createPeerConnection() {
+
+    socket = io(serverLocation.value);
+    socket.emit('createRoom', {
+        callerId: uuidv4(),
+    });
+
     connectButton.disabled = true;
     hangupButton.disabled = false;
 
