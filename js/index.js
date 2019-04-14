@@ -1,15 +1,22 @@
+/*
+10:16 PM 영직이 혹시 구현하면서
+10:16 PM 영직이 페이로드 시그널링으로 보낼 때
+10:16 PM 영직이 밑에 json 포맷으로 페이로드 로그좀 찍어줘
+DialPayload { calleeId = "..." } 이런식으로
+ */
+
 'use strict';
-
-
-const getMediaButton = document.querySelector('button#getMedia');
-const connectButton = document.querySelector('button#connect');
+const createRoomButton = document.querySelector('button#createRoom');
+const awakenButton = document.querySelector('button#awaken');
 const hangupButton = document.querySelector('button#hangup');
 
-getMediaButton.onclick = getMedia;
-connectButton.onclick = createPeerConnection;
+createRoomButton.onclick = createRoom;
+awakenButton.onclick = awakenAndAceept;
 hangupButton.onclick = hangup;
 
-const serverLocation = document.querySelector('div#server input');
+const server = document.querySelector('div#server input');
+const callerIdInput = document.querySelector('div#callerId input');
+const calleeIdInput = document.querySelector('div#calleeId input');
 const minWidthInput = document.querySelector('div#minWidth input');
 const maxWidthInput = document.querySelector('div#maxWidth input');
 const minHeightInput = document.querySelector('div#minHeight input');
@@ -37,7 +44,9 @@ let remotePeerConnection;
 let localStream;
 let bytesPrev;
 let timestampPrev;
-let socket;
+let socket = io(server.value);
+
+// TODO : send, relay icecandidate
 
 // 참고 : https://stackoverflow.com/questions/105034/create-guid-uuid-in-javascript
 function uuidv4() {
@@ -52,6 +61,7 @@ main();
 function main() {
     displayGetUserMediaConstraints();
 }
+
 
 function hangup() {
     console.log('Ending call');
@@ -77,12 +87,24 @@ function hangup() {
     localStream = null;
 
     hangupButton.disabled = true;
-    getMediaButton.disabled = false;
+    createRoomButton.disabled = false;
 }
 
-// 자신의 미디어 받아오는 부분
-function getMedia() {
-    getMediaButton.disabled = true;
+// createRoom
+function createRoom() {
+    createRoomButton.disabled = true;
+    awakenButton.disabled = true;
+    callerIdInput.value = uuidv4();
+    getLocalStream();
+    emitCreateRoom();
+    emitDial();
+}
+
+function getLocalStream() {
+
+    localPeerConnection = new RTCPeerConnection(null);
+    remotePeerConnection = new RTCPeerConnection(null);
+
     if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
         const videoTracks = localStream.getVideoTracks();
@@ -91,21 +113,125 @@ function getMedia() {
         }
     }
     navigator.mediaDevices.getUserMedia(getUserMediaConstraints())
-        .then(gotStream)
+        .then((stream) => {
+            localStream = stream;
+            localVideo.srcObject = stream;
+        })
         .catch(e => {
             const message = `getUserMedia error: ${e.name}\nPermissionDeniedError may mean invalid constraints.`;
-            alert(message);
             console.log(message);
-            getMediaButton.disabled = false;
+            createRoomButton.disabled = false;
         });
 }
 
-function gotStream(stream) {
-    connectButton.disabled = false;
-    console.log('GetUserMedia succeeded');
-    localStream = stream;
-    localVideo.srcObject = stream;
+
+function emitCreateRoom(){
+    socket.emit('createRoom', {
+        room: callerIdInput.value,
+        callerId: callerIdInput.value,
+    })
 }
+
+//사실상 서버,웹 클라 둘다 아무것도 하지 않음.
+function emitDial(){
+    socket.emit('dialToCallee', {
+        calleeId: 'calleeId',
+        skipNotification: true,
+    })
+}
+
+// awaken버튼 눌렀을 때 동작, 제 2, 3자를 위한 버튼
+// 웹만의 통신에서는 caller의 id로 room번호가 생기기때문에, caller의 id를 복사한 후 진행
+function awakenAndAceept() {
+    if (!callerIdInput.value) {
+        alert('caller의 ID를 입력해주세요(방번호로서의 역할)');
+        return;
+    }
+    function awaken() {
+        createRoomButton.disabled = true;
+        awakenButton.disabled = true;
+        calleeIdInput.value = uuidv4();
+
+        socket.emit('awaken', {
+            room: callerIdInput.value,
+            calleeId: calleeIdInput.value,
+        });
+        socket.emit('created', {
+            calleeId: calleeIdInput.value,
+        })
+    }
+
+    function accept(){
+
+        let sdp;
+
+        localPeerConnection.onicecandidate = e => {
+            console.log('Candidate localPeerConnection');
+            remotePeerConnection
+                .addIceCandidate(e.candidate)
+                .then(onAddIceCandidateSuccess, onAddIceCandidateError);
+        };
+        remotePeerConnection.onicecandidate = e => {
+            console.log('Candidate remotePeerConnection');
+            localPeerConnection
+                .addIceCandidate(e.candidate)
+                .then(onAddIceCandidateSuccess, onAddIceCandidateError);
+        };
+        remotePeerConnection.ontrack = e => {
+            if (remoteVideo.srcObject !== e.streams[0]) {
+                console.log('remotePeerConnection got stream');
+                remoteVideo.srcObject = e.streams[0];
+            }
+        };
+        //create offer, send accept with sdp
+        localPeerConnection.createOffer().then(
+            desc => {
+                sdp = desc;
+                localPeerConnection.setLocalDescription(desc);
+            }
+        ).then(() => {
+            socket.emit('accept', {
+                sdp: sdp,
+                room: callerIdInput.value,
+                receiver: calleeIdInput.value,
+            })
+        }).catch(() => console.log('accept error'));
+    }
+    getLocalStream();
+    awaken();
+    accept();
+}
+
+socket.on('relayOffer', (payload) => {
+    const {
+        sdp,
+        receiver,
+    } = payload;
+
+    console.log(`relayOffer/ sdp : ${sdp}, receiver : ${receiver}`);
+
+    localPeerConnection.setRemoteDescription(sdp);
+    calleeIdInput.value = receiver;
+    localPeerConnection.createAnswer().then((desc) => {
+        localPeerConnection.setLocalDescription(desc);
+        socket.emit('sendAnswer', {
+            sdp: desc,
+            receiver,
+            room: callerIdInput.value,
+        })
+    })
+});
+
+socket.on('relayAnswer', (payload) => {
+    const {
+        sdp,
+        sender,
+        receiver,
+    } = payload;
+    console.log('relayAnswer/ sdp : ${sdp}, sender : ${sender}, receiver : ${receiver}');
+    // TODO : Failed to set remote answer sdp: Called in wrong state: kStable
+    localPeerConnection.setRemoteDescription(sdp);
+});
 
 // input 정보들 읽어서 constraints 만들기
 function getUserMediaConstraints() {
@@ -143,172 +269,6 @@ function getUserMediaConstraints() {
 function displayGetUserMediaConstraints() {
     const constraints = getUserMediaConstraints();
     getUserMediaConstraintsDiv.textContent = JSON.stringify(constraints, null, '    ');
-}
-
-// connect 버튼을 눌렀을 때 실행
-function createPeerConnection() {
-
-    socket = io(serverLocation.value);
-    socket.emit('createRoom', {
-        callerId: uuidv4(),
-    });
-
-    connectButton.disabled = true;
-    hangupButton.disabled = false;
-
-    bytesPrev = 0;
-    timestampPrev = 0;
-    localPeerConnection = new RTCPeerConnection(null);
-    remotePeerConnection = new RTCPeerConnection(null);
-    localStream.getTracks().forEach(track => localPeerConnection.addTrack(track, localStream));
-    console.log('localPeerConnection creating offer');
-    localPeerConnection.onnegotiationeeded = () => console.log('Negotiation needed - localPeerConnection');
-    remotePeerConnection.onnegotiationeeded = () => console.log('Negotiation needed - remotePeerConnection');
-    localPeerConnection.onicecandidate = e => {
-        console.log('Candidate localPeerConnection');
-        remotePeerConnection
-            .addIceCandidate(e.candidate)
-            .then(onAddIceCandidateSuccess, onAddIceCandidateError);
-    };
-    remotePeerConnection.onicecandidate = e => {
-        console.log('Candidate remotePeerConnection');
-        localPeerConnection
-            .addIceCandidate(e.candidate)
-            .then(onAddIceCandidateSuccess, onAddIceCandidateError);
-    };
-    remotePeerConnection.ontrack = e => {
-        if (remoteVideo.srcObject !== e.streams[0]) {
-            console.log('remotePeerConnection got stream');
-            remoteVideo.srcObject = e.streams[0];
-        }
-    };
-    localPeerConnection.createOffer().then(
-        desc => {
-            console.log('localPeerConnection offering');
-            localPeerConnection.setLocalDescription(desc);
-            remotePeerConnection.setRemoteDescription(desc);
-            remotePeerConnection.createAnswer().then(
-                desc2 => {
-                    console.log('remotePeerConnection answering');
-                    remotePeerConnection.setLocalDescription(desc2);
-                    localPeerConnection.setRemoteDescription(desc2);
-                },
-                err => console.log(err)
-            );
-        },
-        err => console.log(err)
-    );
-}
-
-function onAddIceCandidateSuccess() {
-    console.log('AddIceCandidate success.');
-}
-
-function onAddIceCandidateError(error) {
-    console.log(`Failed to add Ice Candidate: ${error.toString()}`);
-}
-
-function showRemoteStats(results) {
-    const statsString = dumpStats(results);
-    receiverStatsDiv.innerHTML = `<h2>Receiver stats</h2>${statsString}`;
-    // calculate video bitrate
-    results.forEach(report => {
-        const now = report.timestamp;
-
-        let bitrate;
-        if (report.type === 'inbound-rtp' && report.mediaType === 'video') {
-            const bytes = report.bytesReceived;
-            if (timestampPrev) {
-                bitrate = 8 * (bytes - bytesPrev) / (now - timestampPrev);
-                bitrate = Math.floor(bitrate);
-            }
-            bytesPrev = bytes;
-            timestampPrev = now;
-        }
-        if (bitrate) {
-            bitrate += ' kbits/sec';
-            bitrateDiv.innerHTML = `<strong>Bitrate:</strong>${bitrate}`;
-        }
-    });
-
-    // figure out the peer's ip
-    let activeCandidatePair = null;
-    let remoteCandidate = null;
-
-    // Search for the candidate pair, spec-way first.
-    results.forEach(report => {
-        if (report.type === 'transport') {
-            activeCandidatePair = results.get(report.selectedCandidatePairId);
-        }
-    });
-    // Fallback for Firefox.
-    if (!activeCandidatePair) {
-        results.forEach(report => {
-            if (report.type === 'candidate-pair' && report.selected) {
-                activeCandidatePair = report;
-            }
-        });
-    }
-    if (activeCandidatePair && activeCandidatePair.remoteCandidateId) {
-        remoteCandidate = results.get(activeCandidatePair.remoteCandidateId);
-    }
-    if (remoteCandidate) {
-        if (remoteCandidate.ip && remoteCandidate.port) {
-            peerDiv.innerHTML = `<strong>Connected to:</strong>${remoteCandidate.ip}:${remoteCandidate.port}`;
-        } else if (remoteCandidate.ipAddress && remoteCandidate.portNumber) {
-            // Fall back to old names.
-            peerDiv.innerHTML = `<strong>Connected to:</strong>${remoteCandidate.ipAddress}:${remoteCandidate.portNumber}`;
-        }
-    }
-}
-
-function showLocalStats(results) {
-    const statsString = dumpStats(results);
-    senderStatsDiv.innerHTML = `<h2>Sender stats</h2>${statsString}`;
-}
-
-// Display statistics
-setInterval(() => {
-    if (localPeerConnection && remotePeerConnection) {
-        remotePeerConnection
-            .getStats(null)
-            .then(showRemoteStats, err => console.log(err));
-        localPeerConnection
-            .getStats(null)
-            .then(showLocalStats, err => console.log(err));
-    } else {
-        console.log('Not connected yet');
-    }
-    // Collect some stats from the video tags.
-    if (localVideo.videoWidth) {
-        const width = localVideo.videoWidth;
-        const height = localVideo.videoHeight;
-        localVideoStatsDiv.innerHTML = `<strong>Video dimensions:</strong> ${width}x${height}px`;
-    }
-    if (remoteVideo.videoWidth) {
-        const rHeight = remoteVideo.videoHeight;
-        const rWidth = remoteVideo.videoWidth;
-        remoteVideoStatsDiv.innerHTML = `<strong>Video dimensions:</strong> ${rWidth}x${rHeight}px`;
-    }
-}, 1000);
-
-// Dumping a stats variable as a string.
-// might be named toString?
-function dumpStats(results) {
-    let statsString = '';
-    results.forEach(res => {
-        statsString += '<h3>Report type=';
-        statsString += res.type;
-        statsString += '</h3>\n';
-        statsString += `id ${res.id}<br>`;
-        statsString += `time ${res.timestamp}<br>`;
-        Object.keys(res).forEach(k => {
-            if (k !== 'timestamp' && k !== 'type' && k !== 'id') {
-                statsString += `${k}: ${res[k]}<br>`;
-            }
-        });
-    });
-    return statsString;
 }
 
 // Utility to show the value of a range in a sibling span element

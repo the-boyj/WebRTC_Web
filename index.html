@@ -11,9 +11,11 @@
 <body>
 
 <div>
-    <button id="getMedia">Get media</button>
-    <button id="connect" disabled="">Connect</button>
-    <button id="hangup" disabled="">Hang Up</button>
+    <div>첫번째 Caller : createRoom 버튼</div>
+    <div>두번째 이후 Callee : awaken 버튼</div>
+    <button id="createRoom">Create Room</button>
+    <button id="awaken">Awaken</button>
+    <button id="hangup">Hang Up</button>
 </div>
 
 <div id="getUserMedia">
@@ -22,6 +24,14 @@
         <div id="server">
             <label>서버 주소 : </label>
             <input type="text" value="http://localhost:3000">
+        </div>
+        <div id="callerId">
+            <label>callerId : </label>
+            <input type="text">
+        </div>
+        <div id="calleeId">
+            <label>calleeId : </label>
+            <input type="text">
         </div>
         <div id="minWidth">
             <label>Min width <span>300</span>px:</label>
