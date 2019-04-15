@@ -39,9 +39,20 @@ const remoteVideo = document.querySelector('div#remoteVideo video');
 const localVideoStatsDiv = document.querySelector('div#localVideo div');
 const remoteVideoStatsDiv = document.querySelector('div#remoteVideo div');
 
+const pcConfig = {
+    'iceServers': [{
+        urls: 'stun:stun.l.google.com:19302'
+    },
+    {
+        urls: 'turn:numb.viagenie.ca',
+        credential: 'muazkh',
+        username: 'webrtc@live.com',
+    }]
+};
+
 let localPeerConnection;
-let remotePeerConnection;
 let localStream;
+let remoteStream;
 let bytesPrev;
 let timestampPrev;
 let socket = io(server.value);
@@ -66,21 +77,16 @@ function main() {
 function hangup() {
     console.log('Ending call');
     localPeerConnection.close();
-    remotePeerConnection.close();
 
     // query stats one last time.
     Promise
         .all([
-            remotePeerConnection
-                .getStats(null)
-                .then(showRemoteStats, err => console.log(err)),
             localPeerConnection
                 .getStats(null)
                 .then(showLocalStats, err => console.log(err))
         ])
         .then(() => {
             localPeerConnection = null;
-            remotePeerConnection = null;
         });
 
     localStream.getTracks().forEach(track => track.stop());
@@ -95,15 +101,32 @@ function createRoom() {
     createRoomButton.disabled = true;
     awakenButton.disabled = true;
     callerIdInput.value = uuidv4();
-    getLocalStream();
+    getLocalStream(true);
     emitCreateRoom();
     emitDial();
 }
 
-function getLocalStream() {
+let candidateReceiver;
+function getLocalStream(caller) {
+
+    navigator.mediaDevices.getUserMedia(getUserMediaConstraints())
+        .then(gotStream)
+        .catch(e => {
+            const message = `getUserMedia error: ${e.name}\nPermissionDeniedError may mean invalid constraints.`;
+            console.log(message);
+            createRoomButton.disabled = false;
+        });
 
     localPeerConnection = new RTCPeerConnection(null);
-    remotePeerConnection = new RTCPeerConnection(null);
+    if(caller){
+        candidateReceiver = calleeIdInput.value;
+    }else{
+        candidateReceiver = callerIdInput.value;
+    }
+    localPeerConnection.onicecandidate = handleIceCandidate;
+    localPeerConnection.ontrack = e => {
+        remoteVideo.srcObject = e.streams[0];
+    };
 
     if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
@@ -112,18 +135,40 @@ function getLocalStream() {
             videoTracks[i].stop();
         }
     }
-    navigator.mediaDevices.getUserMedia(getUserMediaConstraints())
-        .then((stream) => {
-            localStream = stream;
-            localVideo.srcObject = stream;
-        })
-        .catch(e => {
-            const message = `getUserMedia error: ${e.name}\nPermissionDeniedError may mean invalid constraints.`;
-            console.log(message);
-            createRoomButton.disabled = false;
-        });
 }
 
+function gotStream(stream) {
+    localStream = stream;
+    localVideo.srcObject = stream;
+
+    localPeerConnection = new RTCPeerConnection(null);
+    localPeerConnection.onicecandidate = handleIceCandidate;
+    localPeerConnection.onaddstream = handleRemoteStreamAdded;
+    localPeerConnection.onremovestream = handleRemoteStreamRemoved;
+
+    localPeerConnection.addStream(localStream);
+}
+
+function handleIceCandidate(e) {
+    console.log("sendIceCandidate: ", e);
+    if (e.candidate) {
+        socket.emit('sendIceCandidate', {
+            iceCandidate: e.candidate,
+            receiver: candidateReceiver,
+            room: callerIdInput.value,
+        })
+    }
+}
+
+function handleRemoteStreamAdded(event) {
+    console.log('Remote stream added.');
+    remoteStream = event.stream;
+    remoteVideo.srcObject = remoteStream;
+}
+
+function handleRemoteStreamRemoved(event) {
+    console.log('Remote stream removed. Event: ', event);
+}
 
 function emitCreateRoom(){
     socket.emit('createRoom', {
@@ -165,39 +210,18 @@ function awakenAndAceept() {
 
         let sdp;
 
-        localPeerConnection.onicecandidate = e => {
-            console.log('Candidate localPeerConnection');
-            remotePeerConnection
-                .addIceCandidate(e.candidate)
-                .then(onAddIceCandidateSuccess, onAddIceCandidateError);
-        };
-        remotePeerConnection.onicecandidate = e => {
-            console.log('Candidate remotePeerConnection');
-            localPeerConnection
-                .addIceCandidate(e.candidate)
-                .then(onAddIceCandidateSuccess, onAddIceCandidateError);
-        };
-        remotePeerConnection.ontrack = e => {
-            if (remoteVideo.srcObject !== e.streams[0]) {
-                console.log('remotePeerConnection got stream');
-                remoteVideo.srcObject = e.streams[0];
-            }
-        };
         //create offer, send accept with sdp
-        localPeerConnection.createOffer().then(
-            desc => {
-                sdp = desc;
-                localPeerConnection.setLocalDescription(desc);
-            }
-        ).then(() => {
+        localPeerConnection.createOffer().then( offer => {
+            sdp = offer;
+            localPeerConnection.setLocalDescription(offer);
             socket.emit('accept', {
                 sdp: sdp,
                 room: callerIdInput.value,
                 receiver: calleeIdInput.value,
-            })
-        }).catch(() => console.log('accept error'));
+            });
+        })
     }
-    getLocalStream();
+    getLocalStream(false);
     awaken();
     accept();
 }
@@ -209,13 +233,12 @@ socket.on('relayOffer', (payload) => {
     } = payload;
 
     console.log(`relayOffer/ sdp : ${sdp}, receiver : ${receiver}`);
-
-    localPeerConnection.setRemoteDescription(sdp);
     calleeIdInput.value = receiver;
-    localPeerConnection.createAnswer().then((desc) => {
-        localPeerConnection.setLocalDescription(desc);
+    localPeerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+    localPeerConnection.createAnswer().then((answer) => {
+        localPeerConnection.setLocalDescription(answer);
         socket.emit('sendAnswer', {
-            sdp: desc,
+            sdp: answer,
             receiver,
             room: callerIdInput.value,
         })
@@ -228,10 +251,60 @@ socket.on('relayAnswer', (payload) => {
         sender,
         receiver,
     } = payload;
-    console.log('relayAnswer/ sdp : ${sdp}, sender : ${sender}, receiver : ${receiver}');
+    console.log(`relayAnswer/ sdp : ${sdp}, sender : ${sender}, receiver : ${receiver}`);
     // TODO : Failed to set remote answer sdp: Called in wrong state: kStable
-    localPeerConnection.setRemoteDescription(sdp);
+    localPeerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
 });
+
+socket.on('relayIceCandidate', (payload) => {
+    console.log('relayIceCandidate');
+    const {
+        iceCandidate,
+        sender,
+        receiver,
+    } = payload;
+    let candidate = new RTCIceCandidate({
+        sdpMLineIndex: iceCandidate.sdpMLineIndex,
+        candidate: iceCandidate.candidate
+    });
+    localPeerConnection.addIceCandidate(candidate);
+});
+
+let turnReady;
+if (location.hostname !== 'localhost') {
+    requestTurn(
+        'https://computeengineondemand.appspot.com/turn?username=41784574&key=4080218913'
+    );
+}
+
+function requestTurn(turnURL) {
+    let turnExists = false;
+    for (let i in pcConfig.iceServers) {
+        if (pcConfig.iceServers[i].urls.substr(0, 5) === 'turn:') {
+            turnExists = true;
+            turnReady = true;
+            break;
+        }
+    }
+    if (!turnExists) {
+        console.log('Getting TURN server from ', turnURL);
+        // No TURN server. Get one from computeengineondemand.appspot.com:
+        let xhr = new XMLHttpRequest();
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4 && xhr.status === 200) {
+                let turnServer = JSON.parse(xhr.responseText);
+                console.log('Got TURN server: ', turnServer);
+                pcConfig.iceServers.push({
+                    'urls': 'turn:' + turnServer.username + '@' + turnServer.turn,
+                    'credential': turnServer.password
+                });
+                turnReady = true;
+            }
+        };
+        xhr.open('GET', turnURL, true);
+        xhr.send();
+    }
+}
 
 // input 정보들 읽어서 constraints 만들기
 function getUserMediaConstraints() {
