@@ -50,6 +50,8 @@ const pcConfig = {
     }]
 };
 
+let isCreatedRoom = false;
+
 let localPeerConnection;
 let localStream;
 let remoteStream;
@@ -101,6 +103,7 @@ function createRoom() {
     createRoomButton.disabled = true;
     awakenButton.disabled = true;
     callerIdInput.value = uuidv4();
+    isCreatedRoom = true;
     getLocalStream(true);
     emitCreateRoom();
     emitDial();
@@ -109,6 +112,12 @@ function createRoom() {
 let candidateReceiver;
 function getLocalStream(caller) {
 
+    if(caller){
+        candidateReceiver = calleeIdInput.value;
+    }else{
+        candidateReceiver = callerIdInput.value;
+    }
+    addSocketHandler();
     navigator.mediaDevices.getUserMedia(getUserMediaConstraints())
         .then(gotStream)
         .catch(e => {
@@ -117,36 +126,47 @@ function getLocalStream(caller) {
             createRoomButton.disabled = false;
         });
 
-    localPeerConnection = new RTCPeerConnection(null);
-    if(caller){
-        candidateReceiver = calleeIdInput.value;
-    }else{
-        candidateReceiver = callerIdInput.value;
-    }
-    localPeerConnection.onicecandidate = handleIceCandidate;
-    localPeerConnection.ontrack = e => {
-        remoteVideo.srcObject = e.streams[0];
-    };
 
-    if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
-        const videoTracks = localStream.getVideoTracks();
-        for (let i = 0; i !== videoTracks.length; ++i) {
-            videoTracks[i].stop();
-        }
-    }
 }
 
 function gotStream(stream) {
-    localStream = stream;
-    localVideo.srcObject = stream;
 
     localPeerConnection = new RTCPeerConnection(null);
     localPeerConnection.onicecandidate = handleIceCandidate;
-    localPeerConnection.onaddstream = handleRemoteStreamAdded;
-    localPeerConnection.onremovestream = handleRemoteStreamRemoved;
+    localPeerConnection.ontrack = handleTrackEvent;
+    localPeerConnection.onnegotiationneeded = handleNegotiationNeededEvent;
+    localPeerConnection.onremovetrack = handleRemoteStreamRemoved;
+    localPeerConnection.oniceconnectionstatechange = handleICEConnectionStateChangeEvent;
+    // localPeerConnection.onicegatheringstatechange;
+    localPeerConnection.onsignalingstatechange = handleSignalingStateChangeEvent;
 
-    localPeerConnection.addStream(localStream);
+    localStream = stream;
+    localVideo.srcObject = stream;
+    localStream.getTracks().forEach(track => localPeerConnection.addTrack(track, localStream));
+
+}
+
+function handleNegotiationNeededEvent() {
+    if(isCreatedRoom)
+        return;
+    function accept(){
+
+        let sdp;
+
+        //create offer, send accept with sdp
+        localPeerConnection.createOffer().then( offer => {
+            sdp = offer;
+            localPeerConnection.setLocalDescription(offer);
+            socket.emit('accept', {
+                sdp: sdp,
+                room: callerIdInput.value,
+                receiver: calleeIdInput.value,
+            });
+        }, () => {
+            console.log("rejected createOffer()");
+        })
+    }
+    accept();
 }
 
 function handleIceCandidate(e) {
@@ -160,15 +180,32 @@ function handleIceCandidate(e) {
     }
 }
 
-function handleRemoteStreamAdded(event) {
+function handleTrackEvent(event) {
     console.log('Remote stream added.');
-    remoteStream = event.stream;
-    remoteVideo.srcObject = remoteStream;
+    remoteVideo.srcObject = event.streams[0];
 }
 
 function handleRemoteStreamRemoved(event) {
     console.log('Remote stream removed. Event: ', event);
 }
+
+function handleICEConnectionStateChangeEvent(event) {
+    switch(localPeerConnection.iceConnectionState) {
+        case "closed":
+        case "failed":
+        case "disconnected":
+            hangup();
+            break;
+    }
+}
+
+function handleSignalingStateChangeEvent(event) {
+    switch(localPeerConnection.signalingState) {
+        case "closed":
+            hangup();
+            break;
+    }
+};
 
 function emitCreateRoom(){
     socket.emit('createRoom', {
@@ -206,69 +243,52 @@ function awakenAndAceept() {
         })
     }
 
-    function accept(){
 
-        let sdp;
-
-        //create offer, send accept with sdp
-        localPeerConnection.createOffer().then( offer => {
-            sdp = offer;
-            localPeerConnection.setLocalDescription(offer);
-            socket.emit('accept', {
-                sdp: sdp,
-                room: callerIdInput.value,
-                receiver: calleeIdInput.value,
-            });
-        })
-    }
     getLocalStream(false);
     awaken();
-    accept();
 }
-
-socket.on('relayOffer', (payload) => {
-    const {
-        sdp,
-        receiver,
-    } = payload;
-
-    console.log(`relayOffer/ sdp : ${sdp}, receiver : ${receiver}`);
-    calleeIdInput.value = receiver;
-    localPeerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
-    localPeerConnection.createAnswer().then((answer) => {
-        localPeerConnection.setLocalDescription(answer);
-        socket.emit('sendAnswer', {
-            sdp: answer,
+function addSocketHandler() {
+    socket.on('relayOffer', (payload) => {
+        const {
+            sdp,
             receiver,
-            room: callerIdInput.value,
+        } = payload;
+
+        console.log(`relayOffer/ sdp : ${sdp}, receiver : ${receiver}`);
+        calleeIdInput.value = receiver;
+        localPeerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+        localPeerConnection.createAnswer().then((answer) => {
+            localPeerConnection.setLocalDescription(answer);
+            socket.emit('sendAnswer', {
+                sdp: answer,
+                receiver,
+                room: callerIdInput.value,
+            })
         })
-    })
-});
-
-socket.on('relayAnswer', (payload) => {
-    const {
-        sdp,
-        sender,
-        receiver,
-    } = payload;
-    console.log(`relayAnswer/ sdp : ${sdp}, sender : ${sender}, receiver : ${receiver}`);
-    // TODO : Failed to set remote answer sdp: Called in wrong state: kStable
-    localPeerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
-});
-
-socket.on('relayIceCandidate', (payload) => {
-    console.log('relayIceCandidate');
-    const {
-        iceCandidate,
-        sender,
-        receiver,
-    } = payload;
-    let candidate = new RTCIceCandidate({
-        sdpMLineIndex: iceCandidate.sdpMLineIndex,
-        candidate: iceCandidate.candidate
     });
-    localPeerConnection.addIceCandidate(candidate);
-});
+
+    socket.on('relayAnswer', (payload) => {
+        const {
+            sdp,
+            sender,
+            receiver,
+        } = payload;
+        console.log(`relayAnswer/ sdp : ${sdp}, sender : ${sender}, receiver : ${receiver}`);
+        // TODO : Failed to set remote answer sdp: Called in wrong state: kStable
+        localPeerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+    });
+
+    socket.on('relayIceCandidate', (payload) => {
+        console.log('relayIceCandidate');
+        const {
+            iceCandidate,
+            sender,
+            receiver,
+        } = payload;
+        let candidate = new RTCIceCandidate(iceCandidate);
+        localPeerConnection.addIceCandidate(candidate).catch((err) => console.log(err));
+    });
+}
 
 let turnReady;
 if (location.hostname !== 'localhost') {
