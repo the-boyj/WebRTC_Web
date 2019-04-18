@@ -59,7 +59,7 @@ let bytesPrev;
 let timestampPrev;
 let socket = io(server.value);
 
-// TODO : send, relay icecandidate
+let peerCount = 0;
 
 // 참고 : https://stackoverflow.com/questions/105034/create-guid-uuid-in-javascript
 function uuidv4() {
@@ -77,6 +77,8 @@ function main() {
 
 
 function hangup() {
+    if(localPeerConnection.connectionState !== 'connected')
+        return;
     console.log('Ending call');
     localPeerConnection.close();
 
@@ -91,11 +93,15 @@ function hangup() {
             localPeerConnection = null;
         });
 
-    localStream.getTracks().forEach(track => track.stop());
+    localStream.getTracks().forEach(track => {
+        console.log(track);
+        track.stop()
+    });
     localStream = null;
 
     hangupButton.disabled = true;
     createRoomButton.disabled = false;
+    awakenButton.disabled = false;
 }
 
 // createRoom
@@ -150,15 +156,14 @@ function handleNegotiationNeededEvent() {
     if(isCreatedRoom)
         return;
     function accept(){
-
-        let sdp;
-
         //create offer, send accept with sdp
         localPeerConnection.createOffer().then( offer => {
-            sdp = offer;
+            if(localPeerConnection.localDescription)
+                return;
+
             localPeerConnection.setLocalDescription(offer);
             socket.emit('accept', {
-                sdp: sdp,
+                sdp: offer,
                 room: callerIdInput.value,
                 receiver: calleeIdInput.value,
             });
@@ -232,6 +237,7 @@ function awakenAndAceept() {
     function awaken() {
         createRoomButton.disabled = true;
         awakenButton.disabled = true;
+        hangupButton.disabled = false;
         calleeIdInput.value = uuidv4();
 
         socket.emit('awaken', {
@@ -364,9 +370,32 @@ function displayGetUserMediaConstraints() {
     getUserMediaConstraintsDiv.textContent = JSON.stringify(constraints, null, '    ');
 }
 
+function dumpStats(results) {
+    let statsString = '';
+    results.forEach(res => {
+        statsString += '<h3>Report type=';
+        statsString += res.type;
+        statsString += '</h3>\n';
+        statsString += `id ${res.id}<br>`;
+        statsString += `time ${res.timestamp}<br>`;
+        Object.keys(res).forEach(k => {
+            if (k !== 'timestamp' && k !== 'type' && k !== 'id') {
+                statsString += `${k}: ${res[k]}<br>`;
+            }
+        });
+    });
+    return statsString;
+}
+
+function showLocalStats(results) {
+    const statsString = dumpStats(results);
+    senderStatsDiv.innerHTML = `<h2>Sender stats</h2>${statsString}`;
+}
+
 // Utility to show the value of a range in a sibling span element
 function displayRangeValue(e) {
     const span = e.target.parentElement.querySelector('span');
     span.textContent = e.target.value;
     displayGetUserMediaConstraints();
 }
+
