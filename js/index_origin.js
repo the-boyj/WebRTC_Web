@@ -40,8 +40,6 @@ let bytesPrev;
 let timestampPrev;
 let socket = io(server.value);
 
-socket.on('')
-
 // 참고 : https://stackoverflow.com/questions/105034/create-guid-uuid-in-javascript
 function uuidv4() {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {

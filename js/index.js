@@ -35,7 +35,10 @@ const senderStatsDiv = document.querySelector('div#senderStats');
 const receiverStatsDiv = document.querySelector('div#receiverStats');
 
 const localVideo = document.querySelector('div#localVideo video');
-const remoteVideo = document.querySelector('div#remoteVideo video');
+const remoteVideos = {};
+let remoteVideo;
+const remoteVideosDiv = document.querySelector('div#remoteVideos');
+// const remoteVideo = document.querySelector('div#remoteVideo video');
 const localVideoStatsDiv = document.querySelector('div#localVideo div');
 const remoteVideoStatsDiv = document.querySelector('div#remoteVideo div');
 
@@ -76,33 +79,7 @@ function main() {
 }
 
 
-function hangup() {
-    if(localPeerConnection.connectionState !== 'connected')
-        return;
-    console.log('Ending call');
-    localPeerConnection.close();
 
-    // query stats one last time.
-    Promise
-        .all([
-            localPeerConnection
-                .getStats(null)
-                .then(showLocalStats, err => console.log(err))
-        ])
-        .then(() => {
-            localPeerConnection = null;
-        });
-
-    localStream.getTracks().forEach(track => {
-        console.log(track);
-        track.stop()
-    });
-    localStream = null;
-
-    hangupButton.disabled = true;
-    createRoomButton.disabled = false;
-    awakenButton.disabled = false;
-}
 
 // createRoom
 function createRoom() {
@@ -186,8 +163,9 @@ function handleIceCandidate(e) {
 }
 
 function handleTrackEvent(event) {
-    console.log('Remote stream added.');
-    remoteVideo.srcObject = event.streams[0];
+
+    let remoteSdp = event.srcElement.remoteDescription;
+    remoteVideos[remoteSdp.toString()].srcObject = event.streams[0];
 }
 
 function handleRemoteStreamRemoved(event) {
@@ -253,6 +231,14 @@ function awakenAndAceept() {
     getLocalStream(false);
     awaken();
 }
+
+function makeNewVideoTag(){
+    let videoTag = document.createElement('video');
+    videoTag.setAttribute("playsinline", "");
+    videoTag.setAttribute("autoplay", "");
+    videoTag.setAttribute("muted", "");
+    return videoTag;
+}
 function addSocketHandler() {
     socket.on('relayOffer', (payload) => {
         const {
@@ -260,9 +246,14 @@ function addSocketHandler() {
             receiver,
         } = payload;
 
+        let receivedSdp = new RTCSessionDescription(sdp);
+        let newRemoteVideo = makeNewVideoTag();
+        remoteVideosDiv.append(newRemoteVideo);
+        remoteVideos[receivedSdp.toString()] = newRemoteVideo;
+
         console.log(`relayOffer/ sdp : ${sdp}, receiver : ${receiver}`);
         calleeIdInput.value = receiver;
-        localPeerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+        localPeerConnection.setRemoteDescription(receivedSdp);
         localPeerConnection.createAnswer().then((answer) => {
             localPeerConnection.setLocalDescription(answer);
             socket.emit('sendAnswer', {
@@ -280,8 +271,13 @@ function addSocketHandler() {
             receiver,
         } = payload;
         console.log(`relayAnswer/ sdp : ${sdp}, sender : ${sender}, receiver : ${receiver}`);
-        // TODO : Failed to set remote answer sdp: Called in wrong state: kStable
-        localPeerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+
+        let receivedSdp = new RTCSessionDescription(sdp);
+        let newRemoteVideo = makeNewVideoTag();
+        remoteVideosDiv.append(newRemoteVideo);
+        remoteVideos[receivedSdp.toString()] = newRemoteVideo;
+
+        localPeerConnection.setRemoteDescription(receivedSdp);
     });
 
     socket.on('relayIceCandidate', (payload) => {
@@ -296,40 +292,32 @@ function addSocketHandler() {
     });
 }
 
-let turnReady;
-if (location.hostname !== 'localhost') {
-    requestTurn(
-        'https://computeengineondemand.appspot.com/turn?username=41784574&key=4080218913'
-    );
-}
+function hangup() {
+    if(localPeerConnection.connectionState !== 'connected')
+        return;
+    console.log('Ending call');
+    localPeerConnection.close();
 
-function requestTurn(turnURL) {
-    let turnExists = false;
-    for (let i in pcConfig.iceServers) {
-        if (pcConfig.iceServers[i].urls.substr(0, 5) === 'turn:') {
-            turnExists = true;
-            turnReady = true;
-            break;
-        }
-    }
-    if (!turnExists) {
-        console.log('Getting TURN server from ', turnURL);
-        // No TURN server. Get one from computeengineondemand.appspot.com:
-        let xhr = new XMLHttpRequest();
-        xhr.onreadystatechange = function() {
-            if (xhr.readyState === 4 && xhr.status === 200) {
-                let turnServer = JSON.parse(xhr.responseText);
-                console.log('Got TURN server: ', turnServer);
-                pcConfig.iceServers.push({
-                    'urls': 'turn:' + turnServer.username + '@' + turnServer.turn,
-                    'credential': turnServer.password
-                });
-                turnReady = true;
-            }
-        };
-        xhr.open('GET', turnURL, true);
-        xhr.send();
-    }
+    // query stats one last time.
+    Promise
+        .all([
+            localPeerConnection
+                .getStats(null)
+                .then(showLocalStats, err => console.log(err))
+        ])
+        .then(() => {
+            localPeerConnection = null;
+        });
+
+    localStream.getTracks().forEach(track => {
+        console.log(track);
+        track.stop()
+    });
+    localStream = null;
+
+    hangupButton.disabled = true;
+    createRoomButton.disabled = false;
+    awakenButton.disabled = false;
 }
 
 // input 정보들 읽어서 constraints 만들기
