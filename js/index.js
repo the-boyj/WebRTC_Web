@@ -53,16 +53,17 @@ const pcConfig = {
     }]
 };
 
-let isCreatedRoom = false;
+let isCaller = false;
 
-let localPeerConnection;
+let peerConnections = {};
+let newPeerConnection;
+let receiverValue;
+let senderValue;
 let localStream;
-let remoteStream;
+let localDescription;
 let bytesPrev;
 let timestampPrev;
 let socket = io(server.value);
-
-let peerCount = 0;
 
 // 참고 : https://stackoverflow.com/questions/105034/create-guid-uuid-in-javascript
 function uuidv4() {
@@ -77,28 +78,53 @@ main();
 function main() {
     displayGetUserMediaConstraints();
 }
-
-
-
-
 // createRoom
 function createRoom() {
     createRoomButton.disabled = true;
     awakenButton.disabled = true;
     callerIdInput.value = uuidv4();
-    isCreatedRoom = true;
-    getLocalStream(true);
+    isCaller = true;
+    getLocalStream(isCaller);
     emitCreateRoom();
     emitDial();
 }
 
-let candidateReceiver;
+// awaken버튼 눌렀을 때 동작, 제 2, 3자를 위한 버튼
+// 웹만의 통신에서는 caller의 id로 room번호가 생기기때문에, caller의 id를 복사한 후 진행
+function awakenAndAceept() {
+    if (!callerIdInput.value) {
+        alert('caller의 ID를 입력해주세요(방번호로서의 역할)');
+        return;
+    }
+
+    function awaken() {
+
+        socket.emit('awaken', {
+            room: callerIdInput.value,
+            calleeId: calleeIdInput.value,
+        });
+        socket.emit('created', {
+            calleeId: calleeIdInput.value,
+        })
+    }
+    isCaller = false;
+    createRoomButton.disabled = true;
+    awakenButton.disabled = true;
+    hangupButton.disabled = false;
+    calleeIdInput.value = uuidv4();
+
+    getLocalStream(isCaller);
+    awaken();
+}
+
 function getLocalStream(caller) {
 
     if(caller){
-        candidateReceiver = calleeIdInput.value;
+        senderValue = callerIdInput.value;
+        receiverValue = calleeIdInput.value;
     }else{
-        candidateReceiver = callerIdInput.value;
+        senderValue = calleeIdInput.value;
+        receiverValue = callerIdInput.value;
     }
     addSocketHandler();
     navigator.mediaDevices.getUserMedia(getUserMediaConstraints())
@@ -108,41 +134,36 @@ function getLocalStream(caller) {
             console.log(message);
             createRoomButton.disabled = false;
         });
-
-
 }
 
 function gotStream(stream) {
-
-    localPeerConnection = new RTCPeerConnection(null);
-    localPeerConnection.onicecandidate = handleIceCandidate;
-    localPeerConnection.ontrack = handleTrackEvent;
-    localPeerConnection.onnegotiationneeded = handleNegotiationNeededEvent;
-    localPeerConnection.onremovetrack = handleRemoteStreamRemoved;
-    localPeerConnection.oniceconnectionstatechange = handleICEConnectionStateChangeEvent;
-    // localPeerConnection.onicegatheringstatechange;
-    localPeerConnection.onsignalingstatechange = handleSignalingStateChangeEvent;
-
-    localStream = stream;
-    localVideo.srcObject = stream;
-    localStream.getTracks().forEach(track => localPeerConnection.addTrack(track, localStream));
-
+    if(!localStream) {
+        localStream = stream;
+        localVideo.srcObject = stream;
+    }
+    createNewPeerConnection();
 }
 
 function handleNegotiationNeededEvent() {
-    if(isCreatedRoom)
+    if(isCaller)
         return;
     function accept(){
         //create offer, send accept with sdp
-        localPeerConnection.createOffer().then( offer => {
-            if(localPeerConnection.localDescription)
+        if(!peerConnections[receiverValue]) {
+            createNewPeerConnection();
+            peerConnections[receiverValue] = newPeerConnection;
+        }
+        let pc = peerConnections[receiverValue];
+        pc.createOffer().then( offer => {
+            if(pc.localDescription)
                 return;
-
-            localPeerConnection.setLocalDescription(offer);
+            localDescription = offer;
+            pc.setLocalDescription(offer);
             socket.emit('accept', {
                 sdp: offer,
                 room: callerIdInput.value,
-                receiver: calleeIdInput.value,
+                sender: senderValue,
+                //receiver: receiverValue,
             });
         }, () => {
             console.log("rejected createOffer()");
@@ -152,11 +173,11 @@ function handleNegotiationNeededEvent() {
 }
 
 function handleIceCandidate(e) {
-    console.log("sendIceCandidate: ", e);
+    console.log("sendIceCandidate: ", receiverValue);
     if (e.candidate) {
         socket.emit('sendIceCandidate', {
             iceCandidate: e.candidate,
-            receiver: candidateReceiver,
+            sender: senderValue,
             room: callerIdInput.value,
         })
     }
@@ -173,27 +194,27 @@ function handleRemoteStreamRemoved(event) {
 }
 
 function handleICEConnectionStateChangeEvent(event) {
-    switch(localPeerConnection.iceConnectionState) {
+    switch(newPeerConnection.iceConnectionState) {
         case "closed":
         case "failed":
         case "disconnected":
-            hangup();
+            hangup(event);
             break;
     }
 }
 
 function handleSignalingStateChangeEvent(event) {
-    switch(localPeerConnection.signalingState) {
+    switch(newPeerConnection.signalingState) {
         case "closed":
-            hangup();
+            hangup(event);
             break;
     }
 };
 
 function emitCreateRoom(){
     socket.emit('createRoom', {
-        room: callerIdInput.value,
-        callerId: callerIdInput.value,
+        room: senderValue,
+        callerId: senderValue,
     })
 }
 
@@ -205,32 +226,7 @@ function emitDial(){
     })
 }
 
-// awaken버튼 눌렀을 때 동작, 제 2, 3자를 위한 버튼
-// 웹만의 통신에서는 caller의 id로 room번호가 생기기때문에, caller의 id를 복사한 후 진행
-function awakenAndAceept() {
-    if (!callerIdInput.value) {
-        alert('caller의 ID를 입력해주세요(방번호로서의 역할)');
-        return;
-    }
-    function awaken() {
-        createRoomButton.disabled = true;
-        awakenButton.disabled = true;
-        hangupButton.disabled = false;
-        calleeIdInput.value = uuidv4();
 
-        socket.emit('awaken', {
-            room: callerIdInput.value,
-            calleeId: calleeIdInput.value,
-        });
-        socket.emit('created', {
-            calleeId: calleeIdInput.value,
-        })
-    }
-
-
-    getLocalStream(false);
-    awaken();
-}
 
 function makeNewVideoTag(){
     let videoTag = document.createElement('video');
@@ -239,26 +235,46 @@ function makeNewVideoTag(){
     videoTag.setAttribute("muted", "");
     return videoTag;
 }
+
+function createNewPeerConnection(){
+    newPeerConnection = new RTCPeerConnection(pcConfig);
+    newPeerConnection.onicecandidate = handleIceCandidate;
+    newPeerConnection.ontrack = handleTrackEvent;
+    newPeerConnection.onnegotiationneeded = handleNegotiationNeededEvent;
+    newPeerConnection.onremovetrack = handleRemoteStreamRemoved;
+    newPeerConnection.oniceconnectionstatechange = handleICEConnectionStateChangeEvent;
+    // localPeerConnection.onicegatheringstatechange;
+    newPeerConnection.onsignalingstatechange = handleSignalingStateChangeEvent;
+    localStream.getTracks().forEach(track => newPeerConnection.addTrack(track, localStream));
+}
+
 function addSocketHandler() {
     socket.on('relayOffer', (payload) => {
         const {
             sdp,
-            receiver,
+            sender,
         } = payload;
 
+        createNewPeerConnection();
         let receivedSdp = new RTCSessionDescription(sdp);
         let newRemoteVideo = makeNewVideoTag();
         remoteVideosDiv.append(newRemoteVideo);
         remoteVideos[receivedSdp.toString()] = newRemoteVideo;
+        peerConnections[sender] = newPeerConnection;
 
-        console.log(`relayOffer/ sdp : ${sdp}, receiver : ${receiver}`);
-        calleeIdInput.value = receiver;
-        localPeerConnection.setRemoteDescription(receivedSdp);
-        localPeerConnection.createAnswer().then((answer) => {
-            localPeerConnection.setLocalDescription(answer);
+        console.log(`relayOffer/ sdp : ${sdp}`);
+        receiverValue = calleeIdInput.value = sender;
+
+        let pc = peerConnections[sender];
+        if(!pc.remoteDescription)
+            pc.setRemoteDescription(receivedSdp);
+
+        pc.createAnswer().then((answer) => {
+            pc.setLocalDescription(answer);
             socket.emit('sendAnswer', {
                 sdp: answer,
-                receiver,
+                sender: senderValue,
+                receiver: sender,
                 room: callerIdInput.value,
             })
         })
@@ -272,12 +288,18 @@ function addSocketHandler() {
         } = payload;
         console.log(`relayAnswer/ sdp : ${sdp}, sender : ${sender}, receiver : ${receiver}`);
 
+        if(!peerConnections[sender]){
+            createNewPeerConnection();
+            newPeerConnection.setLocalDescription(localDescription);
+            peerConnections[sender] = newPeerConnection;
+        }
         let receivedSdp = new RTCSessionDescription(sdp);
         let newRemoteVideo = makeNewVideoTag();
         remoteVideosDiv.append(newRemoteVideo);
         remoteVideos[receivedSdp.toString()] = newRemoteVideo;
-
-        localPeerConnection.setRemoteDescription(receivedSdp);
+        let pc = peerConnections[sender];
+        if(!pc.remoteDescription)
+            pc.setRemoteDescription(receivedSdp);
     });
 
     socket.on('relayIceCandidate', (payload) => {
@@ -285,14 +307,18 @@ function addSocketHandler() {
         const {
             iceCandidate,
             sender,
-            receiver,
         } = payload;
         let candidate = new RTCIceCandidate(iceCandidate);
-        localPeerConnection.addIceCandidate(candidate).catch((err) => console.log(err));
+        let pc = peerConnections[sender];
+        pc.addIceCandidate(candidate).catch((err) => console.log(err));
     });
 }
 
-function hangup() {
+function hangup(event) {
+
+    let remoteSdp = event.srcElement.remoteDescription;
+    remoteVideos[remoteSdp.toString()].srcObject = event.streams[0];
+
     if(localPeerConnection.connectionState !== 'connected')
         return;
     console.log('Ending call');
