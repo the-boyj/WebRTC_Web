@@ -56,7 +56,6 @@ const pcConfig = {
 let isCaller = false;
 
 let peerConnections = {};
-let newPeerConnection;
 let receiverValue;
 let senderValue;
 let localStream;
@@ -64,6 +63,7 @@ let localDescription;
 let bytesPrev;
 let timestampPrev;
 let socket = io(server.value);
+let participantsArray = [];
 
 // 참고 : https://stackoverflow.com/questions/105034/create-guid-uuid-in-javascript
 function uuidv4() {
@@ -84,132 +84,10 @@ function createRoom() {
     awakenButton.disabled = true;
     callerIdInput.value = uuidv4();
     isCaller = true;
-    getLocalStream(isCaller);
+    getLocalStreamCaller();
     emitCreateRoom();
     emitDial();
 }
-
-// awaken버튼 눌렀을 때 동작, 제 2, 3자를 위한 버튼
-// 웹만의 통신에서는 caller의 id로 room번호가 생기기때문에, caller의 id를 복사한 후 진행
-function awakenAndAceept() {
-    if (!callerIdInput.value) {
-        alert('caller의 ID를 입력해주세요(방번호로서의 역할)');
-        return;
-    }
-
-    function awaken() {
-
-        socket.emit('awaken', {
-            room: callerIdInput.value,
-            calleeId: calleeIdInput.value,
-        });
-        socket.emit('created', {
-            calleeId: calleeIdInput.value,
-        })
-    }
-    isCaller = false;
-    createRoomButton.disabled = true;
-    awakenButton.disabled = true;
-    hangupButton.disabled = false;
-    calleeIdInput.value = uuidv4();
-
-    getLocalStream(isCaller);
-    awaken();
-}
-
-function getLocalStream(caller) {
-
-    if(caller){
-        senderValue = callerIdInput.value;
-        receiverValue = calleeIdInput.value;
-    }else{
-        senderValue = calleeIdInput.value;
-        receiverValue = callerIdInput.value;
-    }
-    addSocketHandler();
-    navigator.mediaDevices.getUserMedia(getUserMediaConstraints())
-        .then(gotStream)
-        .catch(e => {
-            const message = `getUserMedia error: ${e.name}\nPermissionDeniedError may mean invalid constraints.`;
-            console.log(message);
-            createRoomButton.disabled = false;
-        });
-}
-
-function gotStream(stream) {
-    if(!localStream) {
-        localStream = stream;
-        localVideo.srcObject = stream;
-    }
-    createNewPeerConnection();
-}
-
-function handleNegotiationNeededEvent() {
-    if(isCaller)
-        return;
-    function accept(){
-        //create offer, send accept with sdp
-        if(!peerConnections[receiverValue]) {
-            createNewPeerConnection();
-            peerConnections[receiverValue] = newPeerConnection;
-        }
-        let pc = peerConnections[receiverValue];
-        pc.createOffer().then( offer => {
-            if(pc.localDescription)
-                return;
-            localDescription = offer;
-            pc.setLocalDescription(offer);
-            socket.emit('accept', {
-                sdp: offer,
-                room: callerIdInput.value,
-                sender: senderValue,
-                //receiver: receiverValue,
-            });
-        }, () => {
-            console.log("rejected createOffer()");
-        })
-    }
-    accept();
-}
-
-function handleIceCandidate(e) {
-    console.log("sendIceCandidate: ", receiverValue);
-    if (e.candidate) {
-        socket.emit('sendIceCandidate', {
-            iceCandidate: e.candidate,
-            sender: senderValue,
-            room: callerIdInput.value,
-        })
-    }
-}
-
-function handleTrackEvent(event) {
-
-    let remoteSdp = event.srcElement.remoteDescription;
-    remoteVideos[remoteSdp.toString()].srcObject = event.streams[0];
-}
-
-function handleRemoteStreamRemoved(event) {
-    console.log('Remote stream removed. Event: ', event);
-}
-
-function handleICEConnectionStateChangeEvent(event) {
-    switch(newPeerConnection.iceConnectionState) {
-        case "closed":
-        case "failed":
-        case "disconnected":
-            hangup(event);
-            break;
-    }
-}
-
-function handleSignalingStateChangeEvent(event) {
-    switch(newPeerConnection.signalingState) {
-        case "closed":
-            hangup(event);
-            break;
-    }
-};
 
 function emitCreateRoom(){
     socket.emit('createRoom', {
@@ -226,7 +104,104 @@ function emitDial(){
     })
 }
 
+function emitAwaken() {
+    socket.emit('awaken', {
+        room: callerIdInput.value,
+        callerId: callerIdInput.value,
+        calleeId: calleeIdInput.value,
+    });
+}
 
+function emitAccept() {
+    socket.emit('accept', {
+        room: callerIdInput.value,
+        calleeId: calleeIdInput.value,
+    })
+}
+
+// awaken버튼 눌렀을 때 동작, 제 2, 3자를 위한 버튼
+// 웹만의 통신에서는 caller의 id로 room번호가 생기기때문에, caller의 id를 복사한 후 진행
+function awakenAndAceept() {
+    if (!callerIdInput.value) {
+        alert('caller의 ID를 입력해주세요(방번호로서의 역할)');
+        return;
+    }
+
+    isCaller = false;
+    createRoomButton.disabled = true;
+    awakenButton.disabled = true;
+    hangupButton.disabled = false;
+    calleeIdInput.value = uuidv4();
+
+    emitAwaken();
+    getLocalStreamCallee();
+}
+
+function getLocalStreamCaller() {
+    senderValue = callerIdInput.value;
+    receiverValue = calleeIdInput.value;
+
+    navigator.mediaDevices.getUserMedia(getUserMediaConstraints())
+        .then(gotStream)
+        .catch(e => {
+            const message = `getUserMedia error: ${e.name}\nPermissionDeniedError may mean invalid constraints.`;
+            console.log(message);
+            createRoomButton.disabled = false;
+        });
+}
+
+function getLocalStreamCallee() {
+    senderValue = calleeIdInput.value;
+    receiverValue = callerIdInput.value;
+
+    navigator.mediaDevices.getUserMedia(getUserMediaConstraints())
+        .then(gotStream)
+        .then(emitAccept)
+        .catch(e => {
+            const message = `getUserMedia error: ${e.name}\nPermissionDeniedError may mean invalid constraints.`;
+            console.log(message);
+            createRoomButton.disabled = false;
+        });
+}
+
+function gotStream(stream) {
+    if(!localStream) {
+        localStream = stream;
+        localVideo.srcObject = stream;
+    }
+    // createNewPeerConnection();
+    addSocketHandler();
+}
+
+function handleIceCandidate(e) {
+    console.log("sendIceCandidate: ", receiverValue);
+    if (e.candidate) {
+        socket.emit('sendIceCandidate', {
+            iceCandidate: e.candidate,
+            sender: senderValue,
+            room: callerIdInput.value,
+        })
+    }
+}
+
+function handleTrackEvent(event) {
+    let remoteSdp = event.srcElement.remoteDescription;
+    remoteVideos[remoteSdp.toString()].srcObject = event.streams[0];
+}
+
+function handleRemoteStreamRemoved(event) {
+    console.log('Remote stream removed. Event: ', event);
+}
+
+function handleICEConnectionStateChangeEvent(event) {
+    switch(this.iceConnectionState) {
+        case "closed":
+        case "failed":
+        case "disconnected":
+            hangup(event);
+            break;
+    }
+}
 
 function makeNewVideoTag(){
     let videoTag = document.createElement('video');
@@ -236,41 +211,87 @@ function makeNewVideoTag(){
     return videoTag;
 }
 
-function createNewPeerConnection(){
-    newPeerConnection = new RTCPeerConnection(pcConfig);
+function createNewPeerConnection(participantId){
+    const newPeerConnection = new RTCPeerConnection(pcConfig);
     newPeerConnection.onicecandidate = handleIceCandidate;
     newPeerConnection.ontrack = handleTrackEvent;
-    newPeerConnection.onnegotiationneeded = handleNegotiationNeededEvent;
+    newPeerConnection.onnegotiationneeded = (event) => {
+        if(!isCaller) {
+            newPeerConnection.createOffer().then( offer => {
+                if(newPeerConnection.localDescription)
+                    return;
+                localDescription = offer;
+                newPeerConnection.setLocalDescription(offer);
+                socket.emit('offer', {
+                    sdp: offer,
+                    sender: calleeIdInput.value,
+                    receiver: participantId,
+                });
+            }, () => {
+                console.log("rejected createOffer()");
+            })
+        }
+    };
+
     newPeerConnection.onremovetrack = handleRemoteStreamRemoved;
-    newPeerConnection.oniceconnectionstatechange = handleICEConnectionStateChangeEvent;
-    // localPeerConnection.onicegatheringstatechange;
-    newPeerConnection.onsignalingstatechange = handleSignalingStateChangeEvent;
+    newPeerConnection.oniceconnectionstatechange = (event) => {
+        switch(newPeerConnection.iceConnectionState) {
+            case "closed":
+            case "failed":
+            case "disconnected":
+                hangup(event);
+                break;
+        }
+    };
+
+    newPeerConnection.onsignalingstatechange = (event) => {
+        switch(newPeerConnection.signalingState) {
+            case "closed":
+                hangup(event);
+                break;
+        }
+    };
     localStream.getTracks().forEach(track => newPeerConnection.addTrack(track, localStream));
+
+    return newPeerConnection;
 }
 
 function addSocketHandler() {
+    socket.on('participants', (payload) => {
+        const {
+            participants,
+            length,
+        } = payload;
+
+        participants.forEach((participant) => {
+            participantsArray.push(participant.userId);
+            if(!peerConnections[participant.userId]){
+                peerConnections[participant.userId] = createNewPeerConnection(participant.userId);
+            }
+        });
+    });
+
     socket.on('relayOffer', (payload) => {
         const {
             sdp,
             sender,
         } = payload;
 
-        createNewPeerConnection();
+        const newPc = createNewPeerConnection();
         let receivedSdp = new RTCSessionDescription(sdp);
         let newRemoteVideo = makeNewVideoTag();
         remoteVideosDiv.append(newRemoteVideo);
         remoteVideos[receivedSdp.toString()] = newRemoteVideo;
-        peerConnections[sender] = newPeerConnection;
+        peerConnections[sender] = newPc;
 
         console.log(`relayOffer/ sdp : ${sdp}`);
         receiverValue = calleeIdInput.value = sender;
 
-        let pc = peerConnections[sender];
-        if(!pc.remoteDescription)
-            pc.setRemoteDescription(receivedSdp);
+        if(!newPc.remoteDescription)
+            newPc.setRemoteDescription(receivedSdp);
 
-        pc.createAnswer().then((answer) => {
-            pc.setLocalDescription(answer);
+        newPc.createAnswer().then((answer) => {
+            newPc.setLocalDescription(answer);
             socket.emit('sendAnswer', {
                 sdp: answer,
                 sender: senderValue,
@@ -287,19 +308,19 @@ function addSocketHandler() {
             receiver,
         } = payload;
         console.log(`relayAnswer/ sdp : ${sdp}, sender : ${sender}, receiver : ${receiver}`);
-
-        if(!peerConnections[sender]){
+        const peerConnection = peerConnections[sender];
+        if(!peerConnection){
             createNewPeerConnection();
-            newPeerConnection.setLocalDescription(localDescription);
-            peerConnections[sender] = newPeerConnection;
+            peerConnection.setLocalDescription(localDescription);
+            peerConnections[sender] = peerConnection;
         }
         let receivedSdp = new RTCSessionDescription(sdp);
         let newRemoteVideo = makeNewVideoTag();
         remoteVideosDiv.append(newRemoteVideo);
         remoteVideos[receivedSdp.toString()] = newRemoteVideo;
-        let pc = peerConnections[sender];
-        if(!pc.remoteDescription)
-            pc.setRemoteDescription(receivedSdp);
+
+        if(!peerConnection.remoteDescription)
+            peerConnection.setRemoteDescription(receivedSdp);
     });
 
     socket.on('relayIceCandidate', (payload) => {
@@ -310,7 +331,11 @@ function addSocketHandler() {
         } = payload;
         let candidate = new RTCIceCandidate(iceCandidate);
         let pc = peerConnections[sender];
-        pc.addIceCandidate(candidate).catch((err) => console.log(err));
+        try {
+            pc.addIceCandidate(candidate).catch((err) => console.log(err));
+        }catch{
+            console.log('aa');
+        }
     });
 }
 
