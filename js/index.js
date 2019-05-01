@@ -63,7 +63,6 @@ let localDescription;
 let bytesPrev;
 let timestampPrev;
 let socket = io(server.value);
-let participantsArray = [];
 
 // 참고 : https://stackoverflow.com/questions/105034/create-guid-uuid-in-javascript
 function uuidv4() {
@@ -185,8 +184,8 @@ function handleIceCandidate(e) {
 }
 
 function handleTrackEvent(event) {
-    let remoteSdp = event.srcElement.remoteDescription;
-    remoteVideos[remoteSdp.toString()].srcObject = event.streams[0];
+    let sessionId = parseSdpId(event.srcElement.remoteDescription.sdp);
+    remoteVideos[sessionId].srcObject = event.streams[0];
 }
 
 function handleRemoteStreamRemoved(event) {
@@ -201,14 +200,6 @@ function handleICEConnectionStateChangeEvent(event) {
             hangup(event);
             break;
     }
-}
-
-function makeNewVideoTag(){
-    let videoTag = document.createElement('video');
-    videoTag.setAttribute("playsinline", "");
-    videoTag.setAttribute("autoplay", "");
-    videoTag.setAttribute("muted", "");
-    return videoTag;
 }
 
 function createNewPeerConnection(participantId){
@@ -256,6 +247,38 @@ function createNewPeerConnection(participantId){
     return newPeerConnection;
 }
 
+function makeNewVideo(peerConnection, sdp, sender){
+    let newRemoteVideo = makeNewVideoTag();
+    let newRemoteVideoDiv = makeNewVideoDivTag(newRemoteVideo, sender);
+    remoteVideosDiv.append(newRemoteVideoDiv);
+    let sessionId = parseSdpId(sdp.sdp);
+    remoteVideos[sessionId] = newRemoteVideo;
+    peerConnections[sender] = peerConnection;
+}
+
+function makeNewVideoTag(){
+    let videoTag = document.createElement('video');
+    videoTag.setAttribute("playsinline", "");
+    videoTag.setAttribute("autoplay", "");
+    videoTag.setAttribute("muted", "");
+    videoTag.style.cssText = 'margin-top:10px;margin-bottom:0px';
+    return videoTag;
+}
+
+function makeNewVideoDivTag(newRemoteVideo, sender){
+    let videoDivTag = document.createElement('div');
+
+    let videoCaption = document.createElement('h2');
+    let senderText = document.createTextNode(sender);
+    videoCaption.append(senderText);
+    videoCaption.style.cssText = 'margin:0px';
+
+    videoDivTag.append(newRemoteVideo);
+    videoDivTag.append(videoCaption);
+
+    return videoDivTag;
+}
+
 function addSocketHandler() {
     socket.on('participants', (payload) => {
         const {
@@ -264,7 +287,6 @@ function addSocketHandler() {
         } = payload;
 
         participants.forEach((participant) => {
-            participantsArray.push(participant.userId);
             if(!peerConnections[participant.userId]){
                 peerConnections[participant.userId] = createNewPeerConnection(participant.userId);
             }
@@ -278,17 +300,16 @@ function addSocketHandler() {
         } = payload;
 
         const newPc = createNewPeerConnection();
-        let receivedSdp = new RTCSessionDescription(sdp);
-        let newRemoteVideo = makeNewVideoTag();
-        remoteVideosDiv.append(newRemoteVideo);
-        remoteVideos[receivedSdp.toString()] = newRemoteVideo;
-        peerConnections[sender] = newPc;
+
 
         console.log(`relayOffer/ sdp : ${sdp}`);
         receiverValue = calleeIdInput.value = sender;
 
-        if(!newPc.remoteDescription)
+        if(!newPc.remoteDescription) {
+            let receivedSdp = new RTCSessionDescription(sdp);
+            makeNewVideo(newPc, receivedSdp, sender);
             newPc.setRemoteDescription(receivedSdp);
+        }
 
         newPc.createAnswer().then((answer) => {
             newPc.setLocalDescription(answer);
@@ -314,35 +335,30 @@ function addSocketHandler() {
             peerConnection.setLocalDescription(localDescription);
             peerConnections[sender] = peerConnection;
         }
-        let receivedSdp = new RTCSessionDescription(sdp);
-        let newRemoteVideo = makeNewVideoTag();
-        remoteVideosDiv.append(newRemoteVideo);
-        remoteVideos[receivedSdp.toString()] = newRemoteVideo;
 
-        if(!peerConnection.remoteDescription)
+        if(!peerConnection.remoteDescription) {
+            let receivedSdp = new RTCSessionDescription(sdp);
+            makeNewVideo(peerConnection, receivedSdp, sender);
             peerConnection.setRemoteDescription(receivedSdp);
+        }
     });
 
     socket.on('relayIceCandidate', (payload) => {
-        console.log('relayIceCandidate');
         const {
             iceCandidate,
             sender,
         } = payload;
+        console.log(`relayIceCandidate/ sender : ${sender}`);
         let candidate = new RTCIceCandidate(iceCandidate);
         let pc = peerConnections[sender];
-        try {
-            pc.addIceCandidate(candidate).catch((err) => console.log(err));
-        }catch{
-            console.log('aa');
-        }
+        pc.addIceCandidate(candidate).catch((err) => console.log(err));
     });
 }
 
 function hangup(event) {
-
-    let remoteSdp = event.srcElement.remoteDescription;
-    remoteVideos[remoteSdp.toString()].srcObject = event.streams[0];
+    let sessionId = parseSdpId(event.srcElement.remoteDescription.sdp);
+    console.log(`sessionId : ${sessionId}`);
+    remoteVideos[sessionId].srcObject = event.streams[0];
 
     if(localPeerConnection.connectionState !== 'connected')
         return;
@@ -438,3 +454,8 @@ function displayRangeValue(e) {
     displayGetUserMediaConstraints();
 }
 
+function parseSdpId(sdp) {
+    let originStartIndex = sdp.indexOf('o=');
+    let originEndIndex = sdp.indexOf('s=');
+    return sdp.substring(originStartIndex, originEndIndex);
+};
