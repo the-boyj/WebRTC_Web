@@ -24,6 +24,9 @@ const maxHeightInput = document.querySelector('div#maxHeight input');
 const minFramerateInput = document.querySelector('div#minFramerate input');
 const maxFramerateInput = document.querySelector('div#maxFramerate input');
 
+server.onchange = callerIdInput.onchange =
+    calleeIdInput.onchange = setLocalStorageItem;
+
 minWidthInput.onchange = maxWidthInput.onchange =
     minHeightInput.onchange = maxHeightInput.onchange =
         minFramerateInput.onchange = maxFramerateInput.onchange = displayRangeValue;
@@ -36,22 +39,58 @@ const receiverStatsDiv = document.querySelector('div#receiverStats');
 
 const localVideo = document.querySelector('div#localVideo video');
 const remoteVideos = {};
-let remoteVideo;
 const remoteVideosDiv = document.querySelector('div#remoteVideos');
-// const remoteVideo = document.querySelector('div#remoteVideo video');
+
 const localVideoStatsDiv = document.querySelector('div#localVideo div');
 const remoteVideoStatsDiv = document.querySelector('div#remoteVideo div');
 
+function setLocalStorageItem(e) {
+    const id = e.target.parentElement.getAttribute('id');
+    localStorage.setItem(id, e.target.value);
+}
+
+function applyLocalStorageItems() {
+    for(let key in localStorage) {
+        const value = localStorage.getItem(key);
+        const targetElement = document.querySelector('div#' + key);
+        if(targetElement){
+            const inputTag = targetElement.getElementsByTagName('input');
+            if(inputTag.length > 0)
+                inputTag[0].value = value;
+        }
+    }
+}
+
+// const pcConfig = {
+//     'iceServers': [{
+//         urls: 'stun:stun.l.google.com:19302'
+//     },
+//     {
+//         urls: 'turn:numb.viagenie.ca',
+//         credential: 'muazkh',
+//         username: 'webrtc@live.com',
+//     }]
+// };
 const pcConfig = {
     'iceServers': [{
-        urls: 'stun:stun.l.google.com:19302'
-    },
-    {
-        urls: 'turn:numb.viagenie.ca',
-        credential: 'muazkh',
-        username: 'webrtc@live.com',
+        urls: 'stun:52.78.159.17'
     }]
 };
+
+
+const CREATE_ROOM = 'CREATE_ROOM';
+const DIAL = 'DIAL';
+const AWAKEN = 'AWAKEN';
+const ACCEPT = 'ACCEPT';
+const PARTICIPANTS = 'PARTICIPANTS';
+const OFFER = 'OFFER';
+const RELAY_OFFER = 'RELAY_OFFER';
+const ANSWER = 'ANSWER';
+const RELAY_ANSWER = 'RELAY_ANSWER';
+const SEND_ICE_CANDIDATE = 'SEND_ICE_CANDIDATE';
+const RELAY_ICE_CANDIDATE = 'RELAY_ICE_CANDIDATE';
+const END_OF_CALL = 'END_OF_CALL';
+const NOTIFY_END_OF_CALL = 'NOTIFY_END_OF_CALL';
 
 let isCaller = false;
 
@@ -62,7 +101,7 @@ let localStream;
 let localDescription;
 let bytesPrev;
 let timestampPrev;
-let socket = io(server.value);
+let socket;
 
 // 참고 : https://stackoverflow.com/questions/105034/create-guid-uuid-in-javascript
 function uuidv4() {
@@ -71,17 +110,43 @@ function uuidv4() {
         return v.toString(16);
     });
 }
+function makeEventLog(eventName, payload){
+    let output = eventName;
+    output += '/ ';
+    for(let key in payload){
+        output += key;
+        output += " : ";
+        output += payload[key];
+        output += ' , ';
+    }
+    return output;
+}
+
+function printEmitEvent(eventName, payload){
+    let output = 'emit ';
+    output += makeEventLog(eventName, payload);
+    console.log(output);
+}
+
+function printOnEvent(eventName, payload){
+    let output = 'receive ';
+    output += makeEventLog(eventName, payload);
+    console.log(output);
+}
+
+
 
 main();
 
 function main() {
+    applyLocalStorageItems();
     displayGetUserMediaConstraints();
 }
 // createRoom
 function createRoom() {
     createRoomButton.disabled = true;
     awakenButton.disabled = true;
-    callerIdInput.value = uuidv4();
+    //callerIdInput.value = uuidv4();
     isCaller = true;
     getLocalStreamCaller();
     emitCreateRoom();
@@ -89,33 +154,40 @@ function createRoom() {
 }
 
 function emitCreateRoom(){
-    socket.emit('createRoom', {
+    socket = io(server.value);
+    const payload = {
         room: senderValue,
         callerId: senderValue,
-    })
+    };
+    socket.emit(CREATE_ROOM, payload);
+    printEmitEvent(CREATE_ROOM, payload);
 }
 
 //사실상 서버,웹 클라 둘다 아무것도 하지 않음.
 function emitDial(){
-    socket.emit('dialToCallee', {
-        calleeId: 'calleeId',
+    const payload = {
+        calleeId: 'any calleeId',
         skipNotification: true,
-    })
+    }
+    socket.emit(DIAL, payload);
+    printEmitEvent(DIAL, payload);
 }
 
 function emitAwaken() {
-    socket.emit('awaken', {
+    const payload = {
         room: callerIdInput.value,
         callerId: callerIdInput.value,
         calleeId: calleeIdInput.value,
-    });
+    };
+    socket.emit(AWAKEN, payload);
+    printEmitEvent(AWAKEN, payload);
 }
 
 function emitAccept() {
-    socket.emit('accept', {
-        room: callerIdInput.value,
-        calleeId: calleeIdInput.value,
-    })
+    const payload = {
+    };
+    socket.emit(ACCEPT, payload);
+    printEmitEvent(ACCEPT, payload);
 }
 
 // awaken버튼 눌렀을 때 동작, 제 2, 3자를 위한 버튼
@@ -125,12 +197,12 @@ function awakenAndAceept() {
         alert('caller의 ID를 입력해주세요(방번호로서의 역할)');
         return;
     }
-
+    socket = io(server.value);
     isCaller = false;
     createRoomButton.disabled = true;
     awakenButton.disabled = true;
     hangupButton.disabled = false;
-    calleeIdInput.value = uuidv4();
+    //calleeIdInput.value = uuidv4();
 
     emitAwaken();
     getLocalStreamCallee();
@@ -167,19 +239,27 @@ function gotStream(stream) {
     if(!localStream) {
         localStream = stream;
         localVideo.srcObject = stream;
+
+        localVideo.style.minWidth = `${minWidthInput.value}px`;
+        localVideo.style.maxWidth = `${maxWidthInput.value}px`;
+        localVideo.style.minHeight = `${minHeightInput.value}px`;
+        localVideo.style.maxHeight = `${maxHeightInput.value}px`;
     }
     // createNewPeerConnection();
     addSocketHandler();
 }
 
 function handleIceCandidate(e) {
-    console.log("sendIceCandidate: ", receiverValue);
     if (e.candidate) {
-        socket.emit('sendIceCandidate', {
-            iceCandidate: e.candidate,
-            sender: senderValue,
-            room: callerIdInput.value,
-        })
+        for(let peerConnectionId in peerConnections) {
+            const payload = {
+                iceCandidate: e.candidate,
+                sender: senderValue,
+                receiver: peerConnectionId,
+            };
+            socket.emit(SEND_ICE_CANDIDATE, payload);
+            printEmitEvent(SEND_ICE_CANDIDATE, payload);
+        }
     }
 }
 
@@ -192,15 +272,15 @@ function handleRemoteStreamRemoved(event) {
     console.log('Remote stream removed. Event: ', event);
 }
 
-function handleICEConnectionStateChangeEvent(event) {
-    switch(this.iceConnectionState) {
-        case "closed":
-        case "failed":
-        case "disconnected":
-            hangup(event);
-            break;
-    }
-}
+// function handleICEConnectionStateChangeEvent(event) {
+//     switch(this.iceConnectionState) {
+//         case "closed":
+//         case "failed":
+//         case "disconnected":
+//             hangup(event);
+//             break;
+//     }
+// }
 
 function createNewPeerConnection(participantId){
     const newPeerConnection = new RTCPeerConnection(pcConfig);
@@ -213,35 +293,37 @@ function createNewPeerConnection(participantId){
                     return;
                 localDescription = offer;
                 newPeerConnection.setLocalDescription(offer);
-                socket.emit('offer', {
+                const payload = {
                     sdp: offer,
-                    sender: calleeIdInput.value,
                     receiver: participantId,
-                });
+                    // sender: calleeIdInput.value,
+                };
+                socket.emit(OFFER, payload);
+                printEmitEvent(OFFER, payload);
             }, () => {
                 console.log("rejected createOffer()");
             })
         }
     };
 
-    newPeerConnection.onremovetrack = handleRemoteStreamRemoved;
-    newPeerConnection.oniceconnectionstatechange = (event) => {
-        switch(newPeerConnection.iceConnectionState) {
-            case "closed":
-            case "failed":
-            case "disconnected":
-                hangup(event);
-                break;
-        }
-    };
+    // newPeerConnection.onremovetrack = handleRemoteStreamRemoved;
+    // newPeerConnection.oniceconnectionstatechange = (event) => {
+    //     switch(newPeerConnection.iceConnectionState) {
+    //         case "closed":
+    //         case "failed":
+    //         case "disconnected":
+    //             hangup(event);
+    //             break;
+    //     }
+    // };
 
-    newPeerConnection.onsignalingstatechange = (event) => {
-        switch(newPeerConnection.signalingState) {
-            case "closed":
-                hangup(event);
-                break;
-        }
-    };
+    // newPeerConnection.onsignalingstatechange = (event) => {
+    //     switch(newPeerConnection.signalingState) {
+    //         case "closed":
+    //             hangup(event);
+    //             break;
+    //     }
+    // };
     localStream.getTracks().forEach(track => newPeerConnection.addTrack(track, localStream));
 
     return newPeerConnection;
@@ -276,11 +358,14 @@ function makeNewVideoDivTag(newRemoteVideo, sender){
     videoDivTag.append(newRemoteVideo);
     videoDivTag.append(videoCaption);
 
+    let statsDiv = document.createElement('div');
+    videoDivTag.append(statsDiv);
+
     return videoDivTag;
 }
 
 function addSocketHandler() {
-    socket.on('participants', (payload) => {
+    socket.on(PARTICIPANTS, (payload) => {
         const {
             participants,
             length,
@@ -291,18 +376,17 @@ function addSocketHandler() {
                 peerConnections[participant.userId] = createNewPeerConnection(participant.userId);
             }
         });
+        printOnEvent(PARTICIPANTS, payload);
     });
 
-    socket.on('relayOffer', (payload) => {
+    socket.on(RELAY_OFFER, (payload) => {
         const {
             sdp,
             sender,
         } = payload;
+        printOnEvent(RELAY_OFFER, payload);
 
         const newPc = createNewPeerConnection();
-
-
-        console.log(`relayOffer/ sdp : ${sdp}`);
         receiverValue = calleeIdInput.value = sender;
 
         if(!newPc.remoteDescription) {
@@ -313,22 +397,23 @@ function addSocketHandler() {
 
         newPc.createAnswer().then((answer) => {
             newPc.setLocalDescription(answer);
-            socket.emit('sendAnswer', {
+            const payload = {
                 sdp: answer,
                 sender: senderValue,
                 receiver: sender,
                 room: callerIdInput.value,
-            })
+            };
+            socket.emit(ANSWER, payload);
+            printEmitEvent(ANSWER, payload);
         })
     });
 
-    socket.on('relayAnswer', (payload) => {
+    socket.on(RELAY_ANSWER, (payload) => {
         const {
             sdp,
             sender,
-            receiver,
         } = payload;
-        console.log(`relayAnswer/ sdp : ${sdp}, sender : ${sender}, receiver : ${receiver}`);
+        printOnEvent(RELAY_ANSWER, payload);
         const peerConnection = peerConnections[sender];
         if(!peerConnection){
             createNewPeerConnection();
@@ -343,44 +428,66 @@ function addSocketHandler() {
         }
     });
 
-    socket.on('relayIceCandidate', (payload) => {
+    socket.on(RELAY_ICE_CANDIDATE, (payload) => {
         const {
             iceCandidate,
             sender,
         } = payload;
-        console.log(`relayIceCandidate/ sender : ${sender}`);
+        printOnEvent(RELAY_ICE_CANDIDATE);
         let candidate = new RTCIceCandidate(iceCandidate);
         let pc = peerConnections[sender];
         pc.addIceCandidate(candidate).catch((err) => console.log(err));
     });
+
+    socket.on(NOTIFY_END_OF_CALL, (payload) => {
+        const {
+            sender
+        } = payload;
+        printOnEvent(NOTIFY_END_OF_CALL);
+        delete remoteVideos[sender];
+        let peerConnection = peerConnections[sender].close();
+        closePeerConnection(peerConnection, sender);
+    })
+}
+
+function closePeerConnection(peerConnection, peerConnectionId) {
+    peerConnection.close();
+    Promise.all([
+        peerConnection.getStats(null)
+            .then(null, err => console.log(err))
+    ]).then(() => {
+        peerConnection = null;
+        delete peerConnections[peerConnectionId];
+    });
 }
 
 function hangup(event) {
-    let sessionId = parseSdpId(event.srcElement.remoteDescription.sdp);
-    console.log(`sessionId : ${sessionId}`);
-    remoteVideos[sessionId].srcObject = event.streams[0];
 
-    if(localPeerConnection.connectionState !== 'connected')
-        return;
+    socket.emit(END_OF_CALL, {});
+    printEmitEvent(END_OF_CALL, {});
+
+    for(let sdpId in remoteVideos){
+        delete remoteVideos[sdpId];
+    }
+
+    for(let peerConnectionId in peerConnections){
+        let peerConnection = peerConnections[peerConnectionId];
+        closePeerConnection(peerConnection, peerConnectionId);
+    }
+
+    localVideo.srcObject = null;
+    while(remoteVideosDiv.firstChild){
+        remoteVideosDiv.removeChild(remoteVideosDiv.firstChild);
+    }
+
     console.log('Ending call');
-    localPeerConnection.close();
 
-    // query stats one last time.
-    Promise
-        .all([
-            localPeerConnection
-                .getStats(null)
-                .then(showLocalStats, err => console.log(err))
-        ])
-        .then(() => {
-            localPeerConnection = null;
+    if(localStream!=null){
+        localStream.getTracks().forEach(track => {
+            track.stop()
         });
-
-    localStream.getTracks().forEach(track => {
-        console.log(track);
-        track.stop()
-    });
-    localStream = null;
+        localStream = null;
+    }
 
     hangupButton.disabled = true;
     createRoomButton.disabled = false;
@@ -392,31 +499,51 @@ function getUserMediaConstraints() {
     const constraints = {};
     constraints.audio = true;
     constraints.video = {};
+
+    const minWidth = parseInt(minWidthInput.value);
+    let maxWidth = parseInt(maxWidthInput.value);
+    const minHeight = parseInt(minHeightInput.value);
+    let maxHeight = parseInt(maxHeightInput.value);
+    const maxFrameRate = parseInt(maxFramerateInput.value);
+    let minFrameRate = parseInt(minFramerateInput.value);
+
     if (minWidthInput.value !== '0') {
         constraints.video.width = {};
-        constraints.video.width.min = minWidthInput.value;
+        constraints.video.width.min = parseInt(minWidthInput.value);
     }
     if (maxWidthInput.value !== '0') {
+        if(maxWidth < minWidth){
+            maxWidthInput.value = minWidthInput.value;
+            document.getElementById('maxWidth').querySelector('span').textContent = minWidthInput.value;
+        }
         constraints.video.width = constraints.video.width || {};
-        constraints.video.width.max = maxWidthInput.value;
+        constraints.video.width.max = parseInt(maxWidthInput.value);
     }
     if (minHeightInput.value !== '0') {
         constraints.video.height = {};
-        constraints.video.height.min = minHeightInput.value;
+        constraints.video.height.min = parseInt(minHeightInput.value);
     }
     if (maxHeightInput.value !== '0') {
+        if(maxHeight < minHeight) {
+            maxHeightInput.value = minHeightInput.value;
+            document.getElementById('maxHeight').querySelector('span').textContent = minHeightInput.value;
+        }
         constraints.video.height = constraints.video.height || {};
-        constraints.video.height.max = maxHeightInput.value;
+        constraints.video.height.max = parseInt(maxHeightInput.value);
     }
     if (minFramerateInput.value !== '0') {
         constraints.video.frameRate = {};
-        constraints.video.frameRate.min = minFramerateInput.value;
-    }
-    if (maxFramerateInput.value !== '0') {
-        constraints.video.frameRate = constraints.video.frameRate || {};
-        constraints.video.frameRate.max = maxFramerateInput.value;
+        constraints.video.frameRate.min = parseInt(minFramerateInput.value);
+        if(maxFrameRate < minFrameRate) {
+            maxFramerateInput.value = minFramerateInput.value;
+            document.getElementById('maxFramerate').querySelector('span').textContent = minFramerateInput.value;
+        }
     }
 
+    if (maxFramerateInput.value !== '0') {
+        constraints.video.frameRate = constraints.video.frameRate || {};
+        constraints.video.frameRate.max = parseInt(maxFramerateInput.value);
+    }
     return constraints;
 }
 
@@ -452,6 +579,7 @@ function displayRangeValue(e) {
     const span = e.target.parentElement.querySelector('span');
     span.textContent = e.target.value;
     displayGetUserMediaConstraints();
+    setLocalStorageItem(e);
 }
 
 function parseSdpId(sdp) {
