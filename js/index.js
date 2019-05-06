@@ -61,19 +61,14 @@ function applyLocalStorageItems() {
     }
 }
 
-// const pcConfig = {
-//     'iceServers': [{
-//         urls: 'stun:stun.l.google.com:19302'
-//     },
-//     {
-//         urls: 'turn:numb.viagenie.ca',
-//         credential: 'muazkh',
-//         username: 'webrtc@live.com',
-//     }]
-// };
 const pcConfig = {
     'iceServers': [{
-        urls: 'stun:52.78.159.17'
+        urls: 'stun:stun.l.google.com:19302'
+    },
+    {
+        urls: 'turn:numb.viagenie.ca',
+        credential: 'muazkh',
+        username: 'webrtc@live.com',
     }]
 };
 
@@ -155,8 +150,13 @@ function createRoom() {
 
 function emitCreateRoom(){
     socket = io(server.value);
+    // for webclient
+    // const payload = {
+    //     room: senderValue,
+    //     callerId: senderValue,
+    // };
     const payload = {
-        room: senderValue,
+        room: uuidv4(),
         callerId: senderValue,
     };
     socket.emit(CREATE_ROOM, payload);
@@ -166,9 +166,11 @@ function emitCreateRoom(){
 //사실상 서버,웹 클라 둘다 아무것도 하지 않음.
 function emitDial(){
     const payload = {
-        calleeId: 'any calleeId',
-        skipNotification: true,
-    }
+        calleeId: calleeIdInput.value,
+        // for webclient
+        // skipNotification: true,
+    };
+
     socket.emit(DIAL, payload);
     printEmitEvent(DIAL, payload);
 }
@@ -390,7 +392,10 @@ function addSocketHandler() {
         receiverValue = calleeIdInput.value = sender;
 
         if(!newPc.remoteDescription) {
-            let receivedSdp = new RTCSessionDescription(sdp);
+            let receivedSdp = new RTCSessionDescription({
+                sdp: sdp.description || sdp.sdp,
+                type: sdp.type.toLowerCase(),
+            });
             makeNewVideo(newPc, receivedSdp, sender);
             newPc.setRemoteDescription(receivedSdp);
         }
