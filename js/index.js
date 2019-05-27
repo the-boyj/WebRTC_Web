@@ -73,7 +73,14 @@ function applyLocalStorageItems() {
 // };
 const pcConfig = {
     'iceServers': [{
-        urls: 'stun:52.78.159.17'
+        urls: 'stun:54.180.24.195:3478',
+        credential: 'boyj',
+        username: 'boyj',
+    },
+    {
+        urls: 'stun:13.125.215.141:3478',
+        credential: 'boyj',
+        username: 'boyj',
     }]
 };
 
