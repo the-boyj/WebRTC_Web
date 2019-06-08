@@ -17,6 +17,8 @@ hangupButton.onclick = hangup;
 const server = document.querySelector('div#server input');
 const callerIdInput = document.querySelector('div#callerId input');
 const calleeIdInput = document.querySelector('div#calleeId input');
+const roomInput = document.querySelector('div#room input');
+const skipInput = document.querySelector('div#skip input');
 const minWidthInput = document.querySelector('div#minWidth input');
 const maxWidthInput = document.querySelector('div#maxWidth input');
 const minHeightInput = document.querySelector('div#minHeight input');
@@ -25,7 +27,8 @@ const minFramerateInput = document.querySelector('div#minFramerate input');
 const maxFramerateInput = document.querySelector('div#maxFramerate input');
 
 server.onchange = callerIdInput.onchange =
-    calleeIdInput.onchange = setLocalStorageItem;
+    calleeIdInput.onchange = roomInput.onchange =
+        skipInput.onchange = setLocalStorageItem;
 
 minWidthInput.onchange = maxWidthInput.onchange =
     minHeightInput.onchange = maxHeightInput.onchange =
@@ -46,7 +49,11 @@ const remoteVideoStatsDiv = document.querySelector('div#remoteVideo div');
 
 function setLocalStorageItem(e) {
     const id = e.target.parentElement.getAttribute('id');
-    localStorage.setItem(id, e.target.value);
+    if(id === "skip") {
+        localStorage.setItem(id, skipInput.checked)
+    } else {
+        localStorage.setItem(id, e.target.value);
+    }
 }
 
 function applyLocalStorageItems() {
@@ -55,8 +62,13 @@ function applyLocalStorageItems() {
         const targetElement = document.querySelector('div#' + key);
         if(targetElement){
             const inputTag = targetElement.getElementsByTagName('input');
-            if(inputTag.length > 0)
-                inputTag[0].value = value;
+            if(inputTag.length > 0) {
+                if(key === "skip") {
+                    inputTag[0].checked = (value === 'true');
+                } else {
+                    inputTag[0].value = value;
+                }
+            }
         }
     }
 }
@@ -154,9 +166,12 @@ function emitCreateRoom(){
     // const payload = {
     //     room: senderValue,
     //     callerId: senderValue,
-    // };
+    // };'
+    const uuidRoom = uuidv4();
+    roomInput.value = uuidRoom;
+    roomInput.dispatchEvent(new CustomEvent('change'));
     const payload = {
-        room: uuidv4(),
+        room: uuidRoom,
         callerId: senderValue,
     };
     socket.emit(CREATE_ROOM, payload);
@@ -168,7 +183,7 @@ function emitDial(){
     const payload = {
         calleeId: calleeIdInput.value,
         // for webclient
-        // skipNotification: true,
+        skipNotification: skipInput.checked,
     };
 
     socket.emit(DIAL, payload);
@@ -177,7 +192,8 @@ function emitDial(){
 
 function emitAwaken() {
     const payload = {
-        room: callerIdInput.value,
+        // room: callerIdInput.value,
+        room: roomInput.value,
         callerId: callerIdInput.value,
         calleeId: calleeIdInput.value,
     };
@@ -438,6 +454,11 @@ function addSocketHandler() {
             iceCandidate,
             sender,
         } = payload;
+        if (iceCandidate.sdp && !iceCandidate.candidate) {
+            iceCandidate.candidate = iceCandidate.sdp;
+            delete iceCandidate.sdp;
+        }
+        iceCandidate.sdpMid = "0";
         printOnEvent(RELAY_ICE_CANDIDATE);
         let candidate = new RTCIceCandidate(iceCandidate);
         let pc = peerConnections[sender];
